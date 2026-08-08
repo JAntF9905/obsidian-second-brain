@@ -31,6 +31,8 @@ Options:
 """
 
 import argparse
+import json
+import shutil
 import sys
 from datetime import date
 from pathlib import Path
@@ -47,6 +49,7 @@ TODAY = date.today().isoformat()
 YEAR = date.today().year
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "references" / "bases"
+DEFAULT_PLUGIN_REPO = Path("~/Obsidian_Plugins/plugins").expanduser()
 
 # Maps template filename → (output filename, placeholder to replace)
 BASE_TEMPLATES: dict[str, tuple[str, str]] = {
@@ -199,6 +202,90 @@ def write_bases(vault: Path, style: str = "obsidian", preset_folders: list[str] 
         content = template_path.read_text(encoding="utf-8")
         target.write_text(content.replace(placeholder, folder), encoding="utf-8")
         print(f"  ✓ {target}")
+
+
+def copy_obsidian_plugins(
+    vault: Path,
+    plugin_repo: Path | str | None = None,
+    no_plugins: bool = False,
+    plugin_filter: list[str] | None = None,
+    force: bool | None = None,
+) -> list[str]:
+    """Copy plugin directories from a local plugin repository into <vault>/.obsidian/plugins/
+    and configure .obsidian/community-plugins.json.
+
+    Returns the list of enabled plugin IDs.
+    """
+    if no_plugins:
+        return []
+
+    repo_path: Path | None = None
+    if plugin_repo is not None:
+        repo_path = Path(plugin_repo).expanduser().resolve()
+    elif DEFAULT_PLUGIN_REPO.exists() and DEFAULT_PLUGIN_REPO.is_dir():
+        repo_path = DEFAULT_PLUGIN_REPO.resolve()
+
+    if repo_path is None or not repo_path.exists() or not repo_path.is_dir():
+        if plugin_repo is not None:
+            print(f"  ⚠️  Plugin repository not found at: {plugin_repo}")
+        return []
+
+    force_val = FORCE if force is None else force
+    obsidian_dir = vault / ".obsidian"
+    obsidian_dir.mkdir(exist_ok=True)
+    target_plugins_dir = obsidian_dir / "plugins"
+    target_plugins_dir.mkdir(exist_ok=True)
+
+    enabled_plugin_ids: list[str] = []
+
+    for item in sorted(repo_path.iterdir()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+
+        plugin_id = item.name
+        manifest_file = item / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                if isinstance(manifest_data, dict) and "id" in manifest_data:
+                    plugin_id = manifest_data["id"]
+            except Exception:
+                pass
+
+        if plugin_filter and plugin_id not in plugin_filter and item.name not in plugin_filter:
+            continue
+
+        dest_dir = target_plugins_dir / item.name
+        if dest_dir.exists() and not force_val:
+            print(f"  = kept existing plugin {dest_dir.name}")
+        else:
+            dest_dir.mkdir(exist_ok=True)
+            for child in item.iterdir():
+                if child.is_file():
+                    shutil.copy2(child, dest_dir / child.name)
+                elif child.is_dir() and not child.name.startswith("."):
+                    shutil.copytree(child, dest_dir / child.name, dirs_exist_ok=True)
+            print(f"  ✓ plugin copied: {item.name}")
+
+        if plugin_id not in enabled_plugin_ids:
+            enabled_plugin_ids.append(plugin_id)
+
+    if enabled_plugin_ids:
+        community_plugins_file = obsidian_dir / "community-plugins.json"
+        existing_enabled: list[str] = []
+        if community_plugins_file.exists():
+            try:
+                existing_enabled = json.loads(community_plugins_file.read_text(encoding="utf-8"))
+                if not isinstance(existing_enabled, list):
+                    existing_enabled = []
+            except Exception:
+                existing_enabled = []
+
+        combined_ids = list(dict.fromkeys(existing_enabled + enabled_plugin_ids))
+        write(community_plugins_file, json.dumps(combined_ids, indent=2), force=force_val)
+        print(f"  🔌 {len(combined_ids)} plugins enabled in {community_plugins_file.name}")
+
+    return enabled_plugin_ids
 
 
 def render_kanban(columns: list) -> str:
@@ -1191,7 +1278,9 @@ SORT date DESC
 
 
 def bootstrap(vault: Path, name: str, preset_key: str, mode: str, subject: str,
-              jobs: list, include_sidebiz: bool):
+              jobs: list, include_sidebiz: bool,
+              plugin_repo: Path | str | None = None, no_plugins: bool = False,
+              plugin_filter: list[str] | None = None):
     preset = PRESETS[preset_key]
 
     print(f"\n🧠 Bootstrapping vault: {vault}")
@@ -1242,6 +1331,13 @@ def bootstrap(vault: Path, name: str, preset_key: str, mode: str, subject: str,
     if not (vault / ".obsidian/app.json").exists():
         write(vault / ".obsidian/app.json", "{}")
 
+    enabled_plugins = copy_obsidian_plugins(
+        vault=vault,
+        plugin_repo=plugin_repo,
+        no_plugins=no_plugins,
+        plugin_filter=plugin_filter,
+    )
+
     # ── Showroom rule ─────────────────────────────────────────────────────────
     # A fresh vault must pass its own health check with zero findings. Scaffold
     # folders that end up empty get an invisible .gitkeep so vault_health's
@@ -1284,6 +1380,12 @@ def main():
     parser.add_argument("--no-sidebiz", action="store_true", help="Omit side business module (default preset only)")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing files (default: keep anything already in the vault)")
+    parser.add_argument("--plugin-repo", default=None,
+                        help="Path to Obsidian plugin repository (default: ~/Obsidian_Plugins/plugins if present)")
+    parser.add_argument("--no-plugins", action="store_true",
+                        help="Disable copying/enabling plugins from plugin repository")
+    parser.add_argument("--plugins", default="",
+                        help="Comma-separated filter of plugin IDs to copy (default: all in repository)")
     args = parser.parse_args()
     global FORCE
     FORCE = args.force
@@ -1300,8 +1402,11 @@ def main():
 
 
     jobs = [j.strip() for j in args.jobs.split(",") if j.strip()]
+    plugin_filter = [p.strip() for p in args.plugins.split(",") if p.strip()] if args.plugins else None
     bootstrap(vault, args.name, args.preset, args.mode, args.subject,
-              jobs, include_sidebiz=not args.no_sidebiz)
+              jobs, include_sidebiz=not args.no_sidebiz,
+              plugin_repo=args.plugin_repo, no_plugins=args.no_plugins,
+              plugin_filter=plugin_filter)
 
 
 if __name__ == "__main__":

@@ -117,3 +117,67 @@ def test_render_kanban_includes_every_column():
     out = bv.render_kanban(["Backlog", "In Progress", "Done"])
     for col in ("Backlog", "In Progress", "Done"):
         assert col in out
+
+
+# --- copy_obsidian_plugins -------------------------------------------------
+
+def test_copy_obsidian_plugins_copies_files_and_writes_config(tmp_path):
+    repo = tmp_path / "plugins_repo"
+    repo.mkdir()
+    plugin1 = repo / "dataview"
+    plugin1.mkdir()
+    (plugin1 / "manifest.json").write_text('{"id": "dataview", "name": "Dataview"}', encoding="utf-8")
+    (plugin1 / "main.js").write_text('console.log("dataview");', encoding="utf-8")
+
+    plugin2 = repo / "calendar"
+    plugin2.mkdir()
+    (plugin2 / "manifest.json").write_text('{"id": "calendar", "name": "Calendar"}', encoding="utf-8")
+    (plugin2 / "main.js").write_text('console.log("calendar");', encoding="utf-8")
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    enabled = bv.copy_obsidian_plugins(vault=vault, plugin_repo=repo, force=False)
+    assert set(enabled) == {"dataview", "calendar"}
+
+    assert (vault / ".obsidian" / "plugins" / "dataview" / "main.js").exists()
+    assert (vault / ".obsidian" / "plugins" / "calendar" / "main.js").exists()
+
+    config = vault / ".obsidian" / "community-plugins.json"
+    assert config.exists()
+    import json
+    enabled_in_config = json.loads(config.read_text(encoding="utf-8"))
+    assert set(enabled_in_config) == {"dataview", "calendar"}
+
+
+def test_copy_obsidian_plugins_respects_no_plugins(tmp_path):
+    repo = tmp_path / "plugins_repo"
+    repo.mkdir()
+    plugin1 = repo / "dataview"
+    plugin1.mkdir()
+    (plugin1 / "manifest.json").write_text('{"id": "dataview"}', encoding="utf-8")
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    enabled = bv.copy_obsidian_plugins(vault=vault, plugin_repo=repo, no_plugins=True)
+    assert enabled == []
+    assert not (vault / ".obsidian" / "plugins").exists()
+
+
+def test_copy_obsidian_plugins_respects_filter(tmp_path):
+    repo = tmp_path / "plugins_repo"
+    repo.mkdir()
+    (repo / "dataview").mkdir()
+    ((repo / "dataview") / "manifest.json").write_text('{"id": "dataview"}', encoding="utf-8")
+    (repo / "calendar").mkdir()
+    ((repo / "calendar") / "manifest.json").write_text('{"id": "calendar"}', encoding="utf-8")
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    enabled = bv.copy_obsidian_plugins(vault=vault, plugin_repo=repo, plugin_filter=["dataview"])
+    assert enabled == ["dataview"]
+    assert (vault / ".obsidian" / "plugins" / "dataview").exists()
+    assert not (vault / ".obsidian" / "plugins" / "calendar").exists()
+
