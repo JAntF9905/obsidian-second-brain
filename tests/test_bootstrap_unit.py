@@ -191,3 +191,13 @@ def test_copy_agent_skills(tmp_path):
     assert (vault / ".agents" / "skills" / "obsidian-save" / "SKILL.md").exists()
 
 
+def test_copy_claude_commands(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    count = bv.copy_claude_commands(vault, force=True)
+    assert count > 0
+    assert (vault / ".claude" / "commands").exists()
+    assert (vault / ".claude" / "commands" / "obsidian-save.md").exists()
+
+
+

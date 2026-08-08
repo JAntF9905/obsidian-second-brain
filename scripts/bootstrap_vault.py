@@ -330,6 +330,43 @@ def copy_agent_skills(vault: Path, force: bool | None = None) -> int:
     return copied_count
 
 
+def copy_claude_commands(vault: Path, force: bool | None = None) -> int:
+    """Copy Claude Code slash commands (dist/claude-code/commands/) into <vault>/.claude/commands/"""
+    repo_root = Path(__file__).resolve().parents[1]
+    dist_commands = repo_root / "dist" / "claude-code" / "commands"
+
+    if not dist_commands.exists():
+        import subprocess
+        try:
+            subprocess.run(["bash", str(repo_root / "scripts" / "build.sh"), "--platform", "claude-code"],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    if not dist_commands.exists():
+        print(f"  ⚠️  Claude commands build not found at {dist_commands}")
+        return 0
+
+    target_dir = vault / ".claude" / "commands"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    force_val = FORCE if force is None else force
+    copied_count = 0
+
+    for item in sorted(dist_commands.iterdir()):
+        if not item.is_file() or item.name.startswith("."):
+            continue
+        dest_file = target_dir / item.name
+        if dest_file.exists() and not force_val:
+            continue
+        shutil.copy2(item, dest_file)
+        copied_count += 1
+
+    if copied_count > 0:
+        print(f"  💬 {copied_count} Claude slash commands installed in .claude/commands/")
+    return copied_count
+
+
 def render_kanban(columns: list) -> str:
     column_blocks = "\n\n\n\n".join(f"## {c}" for c in columns)
     collapse = ",".join(["false"] * len(columns))
@@ -1380,6 +1417,7 @@ def bootstrap(vault: Path, name: str, preset_key: str, mode: str, subject: str,
         plugin_filter=plugin_filter,
     )
     copy_agent_skills(vault)
+    copy_claude_commands(vault)
 
     # ── Showroom rule ─────────────────────────────────────────────────────────
     # A fresh vault must pass its own health check with zero findings. Scaffold
