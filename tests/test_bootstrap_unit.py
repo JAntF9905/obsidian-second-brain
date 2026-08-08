@@ -181,3 +181,13 @@ def test_copy_obsidian_plugins_respects_filter(tmp_path):
     assert (vault / ".obsidian" / "plugins" / "dataview").exists()
     assert not (vault / ".obsidian" / "plugins" / "calendar").exists()
 
+
+def test_copy_agent_skills(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    count = bv.copy_agent_skills(vault, force=True)
+    assert count > 0
+    assert (vault / ".agents" / "skills").exists()
+    assert (vault / ".agents" / "skills" / "obsidian-save" / "SKILL.md").exists()
+
+

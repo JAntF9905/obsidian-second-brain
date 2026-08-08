@@ -288,6 +288,48 @@ def copy_obsidian_plugins(
     return enabled_plugin_ids
 
 
+def copy_agent_skills(vault: Path, force: bool | None = None) -> int:
+    """Copy Agent Skills (dist/agent-skills/skills/) into <vault>/.agents/skills/"""
+    repo_root = Path(__file__).resolve().parents[1]
+    dist_skills = repo_root / "dist" / "agent-skills" / "skills"
+
+    if not dist_skills.exists():
+        import subprocess
+        try:
+            subprocess.run(["bash", str(repo_root / "scripts" / "build.sh"), "--platform", "agent-skills"],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    if not dist_skills.exists():
+        print(f"  ⚠️  Agent skills build not found at {dist_skills}")
+        return 0
+
+    target_dir = vault / ".agents" / "skills"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    force_val = FORCE if force is None else force
+    copied_count = 0
+
+    for item in sorted(dist_skills.iterdir()):
+        if not item.is_dir() or item.name.startswith("."):
+            continue
+        dest_dir = target_dir / item.name
+        if dest_dir.exists() and not force_val:
+            continue
+        dest_dir.mkdir(exist_ok=True)
+        for child in item.iterdir():
+            if child.is_file():
+                shutil.copy2(child, dest_dir / child.name)
+            elif child.is_dir() and not child.name.startswith("."):
+                shutil.copytree(child, dest_dir / child.name, dirs_exist_ok=True)
+        copied_count += 1
+
+    if copied_count > 0:
+        print(f"  🤖 {copied_count} Agent Skills installed in .agents/skills/")
+    return copied_count
+
+
 def render_kanban(columns: list) -> str:
     column_blocks = "\n\n\n\n".join(f"## {c}" for c in columns)
     collapse = ",".join(["false"] * len(columns))
@@ -1337,6 +1379,7 @@ def bootstrap(vault: Path, name: str, preset_key: str, mode: str, subject: str,
         no_plugins=no_plugins,
         plugin_filter=plugin_filter,
     )
+    copy_agent_skills(vault)
 
     # ── Showroom rule ─────────────────────────────────────────────────────────
     # A fresh vault must pass its own health check with zero findings. Scaffold
